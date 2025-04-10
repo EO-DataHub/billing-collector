@@ -1,16 +1,16 @@
 import pulsar
-from billing_schema import BillingEvent
+from eodhp_utils.pulsar.messages import BillingEvent, generate_billingevent_schema
 
+PROMETHEUS_URL = "http://localhost:9090"
 PULSAR_SERVICE_URL = "pulsar://localhost:6650"
-PULSAR_TOPIC = "persistent://public/billing/usage"
-SUBSCRIPTION_NAME = "local-subscription"
+PULSAR_TOPIC = "billing-events"
 
 client = pulsar.Client(PULSAR_SERVICE_URL)
 
 consumer = client.subscribe(
     topic=PULSAR_TOPIC,
-    subscription_name=SUBSCRIPTION_NAME,
-    schema=pulsar.schema.JsonSchema(BillingEvent),
+    schema=generate_billingevent_schema(),
+    subscription_name="local-billing-events-subscription",
 )
 
 print("Waiting for messages...")

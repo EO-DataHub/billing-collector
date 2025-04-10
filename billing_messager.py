@@ -1,18 +1,17 @@
-import json
 import time
 import uuid
 import requests
+from datetime import datetime, timedelta
 from typing import Sequence
+
 from eodhp_utils.messagers import PulsarJSONMessager, Messager
-from billing_schema import BillingEvent
+from eodhp_utils.pulsar.messages import BillingEvent
 
 
 class ResourceUsageMessager(PulsarJSONMessager[BillingEvent]):
     def __init__(self, prometheus_url: str, **kwargs):
         super().__init__(**kwargs)
         self.prometheus_url = prometheus_url
-        self.cumulative_usage = {}
-        self.run_id = str(uuid.uuid4())
         self.scrape_interval_sec = 300  # 5 mins interval
 
     def query_prometheus(self, query: str):
@@ -22,60 +21,72 @@ class ResourceUsageMessager(PulsarJSONMessager[BillingEvent]):
         resp.raise_for_status()
         return resp.json().get("data", {}).get("result", [])
 
-    def collect_usage(self):
-        cpu_query = f'sum(increase(container_cpu_usage_seconds_total{{namespace=~"ws-.*"}}[{self.scrape_interval_sec}s])) by (namespace)'
-        mem_query = f'sum(avg_over_time(container_memory_usage_bytes{{namespace=~"ws-.*"}}[{self.scrape_interval_sec}s])) by (namespace)'
+    def collect_usage(self, start_time: datetime, end_time: datetime):
+        interval_sec = int((end_time - start_time).total_seconds())
+        # cpu_query = f'sum(increase(container_cpu_usage_seconds_total{{namespace=~"ws-.*"}}[{interval_sec}s])) by (namespace)'
+        # mem_query = f'sum(avg_over_time(container_memory_usage_bytes{{namespace=~"ws-.*"}}[{interval_sec}s])) by (namespace)'
+
+        cpu_query = f'sum(increase(container_cpu_usage_seconds_total{{namespace=~"a.*"}}[{interval_sec}s])) by (namespace)'
+        mem_query = f'sum(avg_over_time(container_memory_usage_bytes{{namespace=~"a.*"}}[{interval_sec}s])) by (namespace)'
 
         cpu_data = self.query_prometheus(cpu_query)
         mem_data = self.query_prometheus(mem_query)
 
-        usage_this_interval = {}
+        usage = {}
         for entry in cpu_data:
             ns = entry["metric"]["namespace"]
-            usage_this_interval.setdefault(ns, {})["cpu"] = float(entry["value"][1])
+            usage.setdefault(ns, {})["cpu"] = float(entry["value"][1])
 
         for entry in mem_data:
             ns = entry["metric"]["namespace"]
             avg_bytes = float(entry["value"][1])
-            mem_gb_seconds = (avg_bytes * self.scrape_interval_sec) / (1024**3)
-            usage_this_interval.setdefault(ns, {})["mem"] = mem_gb_seconds
+            mem_gb_seconds = (avg_bytes * interval_sec) / (1024**3)
+            usage.setdefault(ns, {})["mem"] = mem_gb_seconds
 
-        return usage_this_interval
+        return usage
+
+    def send_event(self, workspace, sku, quantity, start, end):
+        event = BillingEvent(
+            uuid=str(uuid.uuid4()),
+            event_start=start.isoformat() + "Z",
+            event_end=end.isoformat() + "Z",
+            sku=sku,
+            user=None,  # Currently not tracked
+            workspace=workspace,
+            quantity=round(quantity, 6),
+        )
+        self.producer.send(event)
+        print(
+            f"Sent {sku} billing event for {workspace} ({quantity}) [{start} - {end}]"
+        )
 
     def process_payload(self, _: BillingEvent) -> Sequence[Messager.Action]:
         return []
-
-    def gen_empty_catalogue_message(self, msg):
-        raise NotImplementedError("Billing service doesn't produce catalogue messages.")
-
+    
     def run_periodic(self):
         while True:
-            usage = self.collect_usage()
-            timestamp_iso = time.strftime(
-                "%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time())
+            event_end = datetime.utcnow()
+            event_start = event_end - timedelta(seconds=self.scrape_interval_sec)
+
+            usage = self.collect_usage(event_start, event_end)
+
+            for workspace, data in usage.items():
+                if "cpu" in data:
+                    self.send_event(
+                        workspace, "cpu-seconds", data["cpu"], event_start, event_end
+                    )
+                if "mem" in data:
+                    self.send_event(
+                        workspace,
+                        "memory-gb-seconds",
+                        data["mem"],
+                        event_start,
+                        event_end,
+                    )
+
+            sleep_time = max(
+                0,
+                self.scrape_interval_sec
+                - (datetime.utcnow() - event_end).total_seconds(),
             )
-
-            for ns, data in usage.items():
-                prev = self.cumulative_usage.get(ns, {"cpu": 0.0, "mem": 0.0})
-                cumulative_cpu = prev["cpu"] + data.get("cpu", 0.0)
-                cumulative_mem = prev["mem"] + data.get("mem", 0.0)
-
-                self.cumulative_usage[ns] = {
-                    "cpu": cumulative_cpu,
-                    "mem": cumulative_mem,
-                }
-
-                event = BillingEvent(
-                    namespace=ns,
-                    cpu_seconds_total=round(cumulative_cpu, 4),
-                    memory_gb_seconds_total=round(cumulative_mem, 4),
-                    timestamp=timestamp_iso,
-                    source_run_id=self.run_id,
-                )
-
-                properties = {}
-                self.producer.send(event, properties=properties)
-
-                print(f"Sent billing event for namespace {ns} at {timestamp_iso}")
-
-            time.sleep(self.scrape_interval_sec)
+            time.sleep(sleep_time)

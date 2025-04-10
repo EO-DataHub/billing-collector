@@ -1,18 +1,22 @@
 import pulsar
 from billing_messager import ResourceUsageMessager
-from billing_schema import BillingEvent
+from eodhp_utils.pulsar.messages import generate_billingevent_schema
 
 PROMETHEUS_URL = "http://localhost:9090"
 PULSAR_SERVICE_URL = "pulsar://localhost:6650"
-PULSAR_TOPIC = "persistent://public/billing/usage"
+PULSAR_TOPIC = "billing-events"
 
 client = pulsar.Client(PULSAR_SERVICE_URL)
 
 producer = client.create_producer(
-    topic=PULSAR_TOPIC, schema=pulsar.schema.JsonSchema(BillingEvent)
+    topic=PULSAR_TOPIC,
+    schema=generate_billingevent_schema()
 )
 
-messager = ResourceUsageMessager(prometheus_url=PROMETHEUS_URL, producer=producer)
+messager = ResourceUsageMessager(
+    prometheus_url=PROMETHEUS_URL,
+    producer=producer
+)
 
 if __name__ == "__main__":
     try:
