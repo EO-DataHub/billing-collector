@@ -1,3 +1,4 @@
+import os
 import time
 import uuid
 import requests
@@ -8,11 +9,15 @@ from eodhp_utils.messagers import PulsarJSONMessager, Messager
 from eodhp_utils.pulsar.messages import BillingEvent
 
 
+WORKSPACE_NAMESPACE_PREFIX = os.getenv("WORKSPACE_NAMESPACE_PREFIX", "ws-")
+SCRAPE_INTERVAL_SEC = int(os.getenv("SCRAPE_INTERVAL_SEC", 300))  # 5 mins interval
+
+
 class ResourceUsageMessager(PulsarJSONMessager[BillingEvent]):
     def __init__(self, prometheus_url: str, **kwargs):
         super().__init__(**kwargs)
         self.prometheus_url = prometheus_url
-        self.scrape_interval_sec = 300  # 5 mins interval
+        self.scrape_interval_sec = SCRAPE_INTERVAL_SEC
 
     def query_prometheus(self, query: str):
         resp = requests.get(
@@ -23,11 +28,9 @@ class ResourceUsageMessager(PulsarJSONMessager[BillingEvent]):
 
     def collect_usage(self, start_time: datetime, end_time: datetime):
         interval_sec = int((end_time - start_time).total_seconds())
-        # cpu_query = f'sum(increase(container_cpu_usage_seconds_total{{namespace=~"ws-.*"}}[{interval_sec}s])) by (namespace)'
-        # mem_query = f'sum(avg_over_time(container_memory_usage_bytes{{namespace=~"ws-.*"}}[{interval_sec}s])) by (namespace)'
 
-        cpu_query = f'sum(increase(container_cpu_usage_seconds_total{{namespace=~"a.*"}}[{interval_sec}s])) by (namespace)'
-        mem_query = f'sum(avg_over_time(container_memory_usage_bytes{{namespace=~"a.*"}}[{interval_sec}s])) by (namespace)'
+        cpu_query = f'sum(increase(container_cpu_usage_seconds_total{{namespace=~"{WORKSPACE_NAMESPACE_PREFIX}.*"}}[{interval_sec}s])) by (namespace)'
+        mem_query = f'sum(avg_over_time(container_memory_usage_bytes{{namespace=~"{WORKSPACE_NAMESPACE_PREFIX}.*"}}[{interval_sec}s])) by (namespace)'
 
         cpu_data = self.query_prometheus(cpu_query)
         mem_data = self.query_prometheus(mem_query)
@@ -62,7 +65,7 @@ class ResourceUsageMessager(PulsarJSONMessager[BillingEvent]):
 
     def process_payload(self, _: BillingEvent) -> Sequence[Messager.Action]:
         return []
-    
+
     def run_periodic(self):
         while True:
             event_end = datetime.utcnow()

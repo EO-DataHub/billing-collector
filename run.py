@@ -1,10 +1,12 @@
+import os
 import pulsar
+
 from billing_messager import ResourceUsageMessager
 from eodhp_utils.pulsar.messages import generate_billingevent_schema
 
-PROMETHEUS_URL = "http://localhost:9090"
-PULSAR_SERVICE_URL = "pulsar://localhost:6650"
-PULSAR_TOPIC = "billing-events"
+PROMETHEUS_URL = os.getenv("PROMETHEUS_URL", "http://localhost:9090")
+PULSAR_SERVICE_URL = os.getenv("PULSAR_SERVICE_URL", "pulsar://localhost:6650")
+PULSAR_TOPIC = os.getenv("PULSAR_TOPIC", "billing-events")
 
 client = pulsar.Client(PULSAR_SERVICE_URL)
 

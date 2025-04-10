@@ -1,9 +1,12 @@
-FROM python:3.11-slim
+FROM python:3.12-slim
 
 WORKDIR /app
 
-COPY billing_collector.py .
+COPY requirements.txt .
+COPY billing_messager.py .
+COPY run.py .
 
-RUN pip install requests pulsar-client
+RUN apt-get update && apt-get install -y git && \
+	pip install --no-cache-dir -r requirements.txt
 
-CMD ["python", "billing_collector.py"]
+CMD ["python", "run.py"]
