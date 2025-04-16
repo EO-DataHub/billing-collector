@@ -25,6 +25,19 @@ class ResourceUsageMessager(PulsarJSONMessager[BillingEvent]):
         resp = requests.get(f"{self.prometheus_url}/api/v1/query", params={"query": query})
         resp.raise_for_status()
         return resp.json().get("data", {}).get("result", [])
+    
+    def query_prometheus_range(self, query: str, start: datetime, end: datetime, step: int):
+        resp = requests.get(
+            f"{self.prometheus_url}/api/v1/query_range",
+            params={
+                "query": query,
+                "start": start.timestamp(),
+                "end": end.timestamp(),
+                "step": step
+            }
+        )
+        resp.raise_for_status()
+        return resp.json().get("data", {}).get("result", [])
 
     def collect_usage(self, start_time: datetime, end_time: datetime):
         interval_sec = int((end_time - start_time).total_seconds())
@@ -58,9 +71,16 @@ class ResourceUsageMessager(PulsarJSONMessager[BillingEvent]):
 
         usage = {}
         for key, query in queries.items():
-            for entry in self.query_prometheus(query):
+            results = self.query_prometheus_range(query, start_time, end_time, interval_sec)
+
+            for entry in results:
                 ns = entry["metric"]["namespace"]
-                value = float(entry["value"][1])
+                values = entry["values"]
+
+                if values:
+                    value = float(values[-1][1])
+                else:
+                    value = 0.0
 
                 if key in ["mem", "requested_mem"]:
                     # Convert bytes to GB-seconds
