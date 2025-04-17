@@ -2,10 +2,11 @@ import argparse
 import os
 
 import pulsar
-from billing_messager import ResourceUsageMessager
 from eodhp_utils.pulsar.messages import generate_billingevent_schema
 from eodhp_utils.runner import setup_logging
-from utils import parse_iso_timestamp
+
+from .billing_messager import ResourceUsageMessager
+from .utils import parse_iso_timestamp
 
 setup_logging(verbosity=1, enable_otel_logging=True)
 

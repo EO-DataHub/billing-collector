@@ -1,7 +1,7 @@
 import os
 import time
 import uuid
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Sequence
 
 import requests
@@ -9,9 +9,10 @@ from eodhp_utils.messagers import Messager, PulsarJSONMessager
 from eodhp_utils.pulsar.messages import BillingEvent
 from opentelemetry import baggage, trace
 from opentelemetry.context import attach, detach
-from utils import bytes_avg_to_gb_seconds
 
-WORKSPACE_NAMESPACE_PREFIX = os.getenv("WORKSPACE_NAMESPACE_PREFIX", "a")
+from .utils import bytes_avg_to_gb_seconds, parse_workspace_name
+
+WORKSPACE_NAMESPACE_PREFIX = os.getenv("WORKSPACE_NAMESPACE_PREFIX", "ws-")
 SCRAPE_INTERVAL_SEC = int(os.getenv("SCRAPE_INTERVAL_SEC", "300"))
 DATA_COMPLETENESS_DELAY_SEC = int(os.getenv("DATA_COMPLETENESS_DELAY_SEC", "60"))
 
@@ -29,7 +30,7 @@ class ResourceUsageMessager(PulsarJSONMessager[BillingEvent, BillingEvent]):
         super().__init__(**kwargs)
         self.prometheus_url = prometheus_url
         self.scrape_interval_sec = SCRAPE_INTERVAL_SEC
-        self.start_time = start_time or (datetime.utcnow() - timedelta(hours=1))
+        self.start_time = start_time or (datetime.now(UTC) - timedelta(hours=1))
         self.explicit_start = explicit_start
 
     def query_prometheus_range(self, query: str, start: datetime, end: datetime, step: int):
@@ -114,7 +115,7 @@ class ResourceUsageMessager(PulsarJSONMessager[BillingEvent, BillingEvent]):
             event_end=end.isoformat() + "Z",
             sku=sku,
             user=None,
-            workspace=workspace,
+            workspace=parse_workspace_name(workspace),
             quantity=round(quantity, 6),
         )
         return Messager.PulsarMessageAction(payload=event)

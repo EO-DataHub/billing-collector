@@ -13,3 +13,13 @@ def parse_iso_timestamp(iso_time: str) -> datetime:
         return datetime.fromisoformat(iso_time.replace("Z", "+00:00"))
     except ValueError as e:
         raise ValueError(f"Invalid ISO8601 timestamp: {iso_time}") from e
+
+
+def parse_workspace_name(workspace: str) -> str:
+    """
+    Parse the workspace name to extract the actual name.
+    """
+    if workspace.startswith("ws-"):
+        return workspace[3:]
+    else:
+        return workspace
