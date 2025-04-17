@@ -1,7 +1,7 @@
 import os
 import time
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Sequence
 
 import requests
@@ -30,7 +30,7 @@ class ResourceUsageMessager(PulsarJSONMessager[BillingEvent, BillingEvent]):
         super().__init__(**kwargs)
         self.prometheus_url = prometheus_url
         self.scrape_interval_sec = SCRAPE_INTERVAL_SEC
-        self.start_time = start_time or (datetime.now(UTC) - timedelta(hours=1))
+        self.start_time = start_time or (datetime.utcnow() - timedelta(hours=1))
         self.explicit_start = explicit_start
 
     def query_prometheus_range(self, query: str, start: datetime, end: datetime, step: int):
