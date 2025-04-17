@@ -30,7 +30,7 @@ jobs:
     name: Run unit tests
     uses: EO-DataHub/github-actions/.github/workflows/unit-tests-python.yaml@main
     with:
-      PYTHON_VERSION: "3.11"
+      PYTHON_VERSION: "3.12"
 
   get-tag-name:
     runs-on: ubuntu-latest
