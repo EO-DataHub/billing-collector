@@ -1,12 +1,19 @@
-FROM python:3.12-slim
+# syntax=docker/dockerfile:1
+FROM python:3.11-slim-bullseye
 
-WORKDIR /app
+RUN rm -f /etc/apt/apt.conf.d/docker-clean; \
+    echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache
 
-COPY requirements.txt .
-COPY billing_messager.py .
-COPY run.py .
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update -y && apt-get upgrade -y
 
-RUN apt-get update && apt-get install -y git && \
-	pip install --no-cache-dir -r requirements.txt
+WORKDIR /billing-collector
+ADD LICENSE.txt requirements.txt ./
+ADD billing-collector ./billing-collector/
+ADD pyproject.toml ./
+RUN --mount=type=cache,target=/root/.cache/pip pip3 install -r requirements.txt .
 
-CMD ["python", "run.py"]
+# Change as required, eg
+#  CMD ["gunicorn", "-w", "2", "-b", "0.0.0.0", "-k", "uvicorn.workers.UvicornWorker", "--log-level", "debug", "mymodule.main:app"]
+CMD python -m billing-collector.main
