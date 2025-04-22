@@ -108,6 +108,7 @@ class ResourceUsageMessager(PulsarJSONMessager[BillingEvent, BillingEvent]):
         return usage
 
     def send_event(self, workspace, sku, quantity, start, end):
+        workspace = parse_workspace_name(workspace)
         event_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, f"{workspace}-{sku}-{start.isoformat()}")
         event = BillingEvent(
             uuid=str(event_uuid),
@@ -115,7 +116,7 @@ class ResourceUsageMessager(PulsarJSONMessager[BillingEvent, BillingEvent]):
             event_end=end.isoformat() + "Z",
             sku=sku,
             user=None,
-            workspace=parse_workspace_name(workspace),
+            workspace=workspace,
             quantity=round(quantity, 6),
         )
         return Messager.PulsarMessageAction(payload=event)
