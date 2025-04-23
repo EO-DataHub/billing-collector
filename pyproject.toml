@@ -14,12 +14,12 @@
 
 [project]
 name = "billing-collector"
-version = "0.1.0"
+dynamic = ["version"]
 description = "billing-collector a short description"
 readme = "README.md"
 
-# Our target version is Python 3.11, but it may work with earlier versions.
-requires-python = ">=3.11"
+# Our target version is Python 3.12, but it may work with earlier versions.
+requires-python = ">=3.12"
 
 license = {file = "LICENSE"}
 
@@ -68,7 +68,7 @@ dependencies = [
   "requests>=2.32,<3",
   "opentelemetry-api>=1.31,<2",
   "opentelemetry-sdk>=1.31,<2",
-  "eodhp-utils @ git+https://github.com/UKEODHP/eodhp-utils.git@360e61cb676739c597d1672d9a42b1dac6f1523d",
+  "eodhp-utils @ git+https://github.com/UKEODHP/eodhp-utils@v0.1.8"
 ]
 
 # List additional groups of dependencies here (e.g. development
@@ -93,15 +93,18 @@ dev = ["pip-tools", "pytest", "pytest-xdist", "pytest-mock", "pytest-watcher", "
 # maintainers, and where to support the project financially. The key is
 # what's used to render the link text on PyPI.
 [project.urls]  # Optional
-homepage = "https://github.com/UKEODHP/"
-repository = "billing-collector-https://github.com/UKEODHP/..."
-changelog = "billing-collector-https://github.com/UKEODHP/.../master/CHANGELOG.md"
+homepage = "https://github.com/EO-DataHub/"
+repository = "https://github.com/EO-DataHub/billing-collector/"
+changelog = "https://github.com/EO-DataHub/billing-collector/blob/main/CHANGELOG.md"
 
 [build-system]
 # These are the assumed default build requirements from pip:
 # https://pip.pypa.io/en/stable/reference/pip/#pep-517-and-518-support
-requires = ["setuptools>=69.0.0", "wheel"]
+requires = ["setuptools>=69.0.0", "wheel", "setuptools-git-versioning>=2.0,<3"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools-git-versioning]
+enabled = true
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
@@ -114,11 +117,11 @@ packages = ["billing_collector"]
 
 [tool.black]
 line-length = 100
-target-version = ['py311']
+target-version = ['py312']
 
 [tool.ruff]
 line-length = 110
-target-version = "py311"
+target-version = "py312"
 select = ["E", "F", "B", "W"]
 
 exclude = [

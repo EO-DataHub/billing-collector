@@ -1,15 +1,25 @@
-# UK EO Data Hub Platform: template repository
+# UK EO Data Hub Platform: Billing Collector
 
-This serves as a template repository for new UKEODHP Python-base software components.
+Tracks CPU and memory usage for each user's workspace.
 
-When using this template remember to:
-* Edit `pyproject.toml` and set everything marked `billing-collector`
-* Update the dependencies as described below.
-* Create a Docker repo in AWS (https://eu-west-2.console.aws.amazon.com/ecr/create-repository?region=eu-west-2 for
-  the Telespazio UKEODHP repos) and update `Makefile` with the name of the Docker image to build.
-* Consider adding `dockerrun` and/or `run` targets to the `Makefile`.
-* Update `Dockerfile`
-* Add a description here of how to do local development.
+Uses **Prometheus**  to query resource usage and uses **Apache Pulsar** to send billing events every X seconds.
+
+
+### For Local Testing
+
+You must have `kubectl` connected to the correct environment's k8s cluster.
+
+```bash
+k port-forward -n pulsar svc/pulsar-proxy 6650:6650 # in one terminal
+
+k port-forward svc/prometheus-server 9090:9090 -n prometheus # in another terminal
+
+cd billing_collector
+python consumer.py # in another terminal
+
+python -m billing_collector # in another terminal
+```
+
 
 # Development of this component
 
@@ -35,19 +45,19 @@ run from GitHub actions.
 
 ### Alternative installation
 
-You will need Python 3.11. On Debian you may need:
+You will need Python 3.12. On Debian you may need:
 * `sudo add-apt-repository -y 'deb http://ppa.launchpad.net/deadsnakes/ppa/ubuntu focal main'` (or `jammy` in place of `focal` for later Debian)
 * `sudo apt update`
-* `sudo apt install python3.11 python3.11-venv`
+* `sudo apt install python3.12 python3.12-venv`
 
 and on Ubuntu you may need
 * `sudo add-apt-repository -y 'ppa:deadsnakes/ppa'`
 * `sudo apt update`
-* `sudo apt install python3.11 python3.11-venv`
+* `sudo apt install python3.12 python3.12-venv`
 
 To prepare running it:
 
-* `virtualenv venv -p python3.11`
+* `virtualenv venv -p python3.12`
 * `. venv/bin/activate`
 * `rehash`
 * `python -m ensurepip -U`
@@ -113,25 +123,3 @@ manually in the following way:
 * Run `make dockerbuild` (for images tagged `latest`) or `make dockerbuild VERSION=1.2.3` for a release tagged `1.2.3`.
   The image will be available locally within Docker after this step.
 * Run `make dockerpush` or `make dockerpush VERSION=1.2.3`. This will send the image to the ECR repository.
-
-
-# Billing Collector
-
-tracks CPU and memory usage for each user's workspace.
-
-uses **Prometheus**  to query resource usage and uses **Apache Pulsar** to send billing events every X seconds.
-
-
-### For Local Testing
-
-You must have `kubectl` connected to the correct environment's k8s cluster.
-
-```bash
-k port-forward -n pulsar svc/pulsar-proxy 6650:6650 # in one terminal
-
-k port-forward svc/prometheus-server 9090:9090 -n prometheus # in another terminal
-
-python consumer.py # in another terminal
-
-python run.py # in another terminal
-```

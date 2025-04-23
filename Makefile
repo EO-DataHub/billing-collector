@@ -1,6 +1,6 @@
 docker ?= docker
 image ?= public.ecr.aws/eodh/billing-collector
-version ?= 0.1.0
+version ?= latest
 port ?= 8000
 
 .SILENT:

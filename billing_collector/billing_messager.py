@@ -19,6 +19,12 @@ DATA_COMPLETENESS_DELAY_SEC = int(os.getenv("DATA_COMPLETENESS_DELAY_SEC", "60")
 tracer = trace.get_tracer("billing-collector")
 
 
+def align_time(dt: datetime, interval_sec: int):
+    timestamp = int(dt.timestamp())
+    aligned_timestamp = timestamp - (timestamp % interval_sec)
+    return datetime.utcfromtimestamp(aligned_timestamp)
+
+
 class ResourceUsageMessager(PulsarJSONMessager[BillingEvent, BillingEvent]):
     def __init__(
         self,
@@ -37,6 +43,7 @@ class ResourceUsageMessager(PulsarJSONMessager[BillingEvent, BillingEvent]):
         """
         Query Prometheus for a range of data including historical.
         """
+        print(f"Querying Prometheus: from {start} to {end} with step {step}")
         resp = requests.get(
             f"{self.prometheus_url}/api/v1/query_range",
             params={
@@ -126,23 +133,19 @@ class ResourceUsageMessager(PulsarJSONMessager[BillingEvent, BillingEvent]):
 
     def run_periodic(self):
         """
-        Run the billing messager periodically, depending on the scrape interval.
+        Run the billing messager periodically aligned to nice intervals (e.g. 00:00, 00:05, 00:10...).
         """
-        next_run_time = self.start_time.replace(microsecond=0)
+        next_run_time = align_time(self.start_time.replace(microsecond=0), self.scrape_interval_sec)
 
         while True:
             current_time = datetime.utcnow() - timedelta(seconds=DATA_COMPLETENESS_DELAY_SEC)
-            if next_run_time + timedelta(seconds=self.scrape_interval_sec) > current_time:
-                # Calculate the sleep duration until the next run time
-                sleep_duration = (
-                    next_run_time + timedelta(seconds=self.scrape_interval_sec) - current_time
-                ).total_seconds()
+            interval_end = next_run_time + timedelta(seconds=self.scrape_interval_sec)
 
-                # Sleep until the next run time
+            if interval_end > current_time:
+                # Sleep exactly until the aligned interval is complete
+                sleep_duration = (interval_end - current_time).total_seconds()
                 time.sleep(max(sleep_duration, 0))
                 continue
-
-            interval_end = next_run_time + timedelta(seconds=self.scrape_interval_sec)
 
             usage = self.collect_usage(next_run_time, interval_end)
 
@@ -175,7 +178,7 @@ class ResourceUsageMessager(PulsarJSONMessager[BillingEvent, BillingEvent]):
                     finally:
                         detach(token)
 
-            next_run_time += timedelta(seconds=self.scrape_interval_sec)
+            next_run_time = interval_end
 
             # If running as a recovery job, exit when caught up
             if self.explicit_start and next_run_time >= datetime.utcnow() - timedelta(
