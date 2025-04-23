@@ -10,19 +10,13 @@ from eodhp_utils.pulsar.messages import BillingEvent
 from opentelemetry import baggage, trace
 from opentelemetry.context import attach, detach
 
-from .utils import bytes_avg_to_gb_seconds, parse_workspace_name
+from .utils import align_time, bytes_avg_to_gb_seconds, parse_workspace_name
 
 WORKSPACE_NAMESPACE_PREFIX = os.getenv("WORKSPACE_NAMESPACE_PREFIX", "ws-")
 SCRAPE_INTERVAL_SEC = int(os.getenv("SCRAPE_INTERVAL_SEC", "300"))
 DATA_COMPLETENESS_DELAY_SEC = int(os.getenv("DATA_COMPLETENESS_DELAY_SEC", "60"))
 
 tracer = trace.get_tracer("billing-collector")
-
-
-def align_time(dt: datetime, interval_sec: int):
-    timestamp = int(dt.timestamp())
-    aligned_timestamp = timestamp - (timestamp % interval_sec)
-    return datetime.utcfromtimestamp(aligned_timestamp)
 
 
 class ResourceUsageMessager(PulsarJSONMessager[BillingEvent, BillingEvent]):

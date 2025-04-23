@@ -25,7 +25,7 @@ deprecated==1.2.18
     # via
     #   opentelemetry-api
     #   opentelemetry-semantic-conventions
-eodhp-utils @ git+https://github.com/UKEODHP/eodhp-utils.git@360e61cb676739c597d1672d9a42b1dac6f1523d
+eodhp-utils @ git+https://github.com/UKEODHP/eodhp-utils@v0.1.8
     # via billing-collector (pyproject.toml)
 faker==37.1.0
     # via eodhp-utils

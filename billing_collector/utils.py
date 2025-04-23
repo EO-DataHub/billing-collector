@@ -23,3 +23,12 @@ def parse_workspace_name(workspace: str) -> str:
         return workspace[3:]
     else:
         return workspace
+
+
+def align_time(dt: datetime, interval_sec: int):
+    """
+    Aligns a given datetime object to the nearest lower interval.
+    """
+    timestamp = int(dt.timestamp())
+    aligned_timestamp = timestamp - (timestamp % interval_sec)
+    return datetime.utcfromtimestamp(aligned_timestamp)
