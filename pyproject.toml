@@ -68,7 +68,8 @@ dependencies = [
   "requests>=2.32,<3",
   "opentelemetry-api>=1.31,<2",
   "opentelemetry-sdk>=1.31,<2",
-  "eodhp-utils @ git+https://github.com/UKEODHP/eodhp-utils@v0.1.8"
+  "click<9",
+  "eodhp-utils @ git+https://github.com/UKEODHP/eodhp-utils@v0.1.11"
 ]
 
 # List additional groups of dependencies here (e.g. development

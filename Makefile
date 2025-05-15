@@ -52,7 +52,7 @@ requirements-update: venv
 	./venv/bin/pip-compile --extra dev -o requirements-dev.txt -U
 
 venv:
-	virtualenv -p python3.11 venv
+	virtualenv -p python3.12 venv
 	./venv/bin/python -m ensurepip -U
 	./venv/bin/pip3 install pip-tools
 
