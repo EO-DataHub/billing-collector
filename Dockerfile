@@ -5,7 +5,7 @@ RUN rm -f /etc/apt/apt.conf.d/docker-clean; \
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
-    apt-get update -y && apt-get upgrade -y && apt-get install -y git
+    apt-get update -y && apt-get upgrade -y && apt-get install -y git g++
 
 WORKDIR /billing-collector
 
