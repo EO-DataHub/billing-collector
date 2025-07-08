@@ -1,8 +1,9 @@
 # for local testing
 
+import logging
+
 import pulsar
 from eodhp_utils.pulsar.messages import generate_billingevent_schema
-import logging
 
 PROMETHEUS_URL = "http://localhost:9090"
 PULSAR_SERVICE_URL = "pulsar://localhost:6650"
