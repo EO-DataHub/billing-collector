@@ -2,6 +2,7 @@
 
 import pulsar
 from eodhp_utils.pulsar.messages import generate_billingevent_schema
+import logging
 
 PROMETHEUS_URL = "http://localhost:9090"
 PULSAR_SERVICE_URL = "pulsar://localhost:6650"
@@ -15,19 +16,19 @@ consumer = client.subscribe(
     subscription_name="billing-events-subscription",
 )
 
-print("Waiting for messages...")
+logging.info("Waiting for messages...")
 
 try:
     while True:
         msg = consumer.receive()
         try:
             billing_event = msg.value()
-            print(billing_event)
+            logging.info(billing_event)
             consumer.acknowledge(msg)
         except Exception as e:
-            print("Failed processing message:", e)
+            logging.info("Failed processing message:", e)
             consumer.negative_acknowledge(msg)
 except KeyboardInterrupt:
-    print("Interrupted by user. Exiting...")
+    logging.info("Interrupted by user. Exiting...")
 finally:
     client.close()
