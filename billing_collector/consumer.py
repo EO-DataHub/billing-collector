@@ -27,9 +27,9 @@ try:
             logging.info(billing_event)
             consumer.acknowledge(msg)
         except Exception as e:
-            logging.info("Failed processing message:", e)
+            logging.error("Failed processing message:", e)
             consumer.negative_acknowledge(msg)
 except KeyboardInterrupt:
-    logging.info("Interrupted by user. Exiting...")
+    logging.warning("Interrupted by user. Exiting...")
 finally:
     client.close()
