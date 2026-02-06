@@ -1,6 +1,7 @@
 # for local testing
 
 import logging
+from typing import cast
 
 import pulsar
 from eodhp_utils.pulsar.messages import generate_billingevent_schema
@@ -13,7 +14,7 @@ client = pulsar.Client(PULSAR_SERVICE_URL)
 
 consumer = client.subscribe(
     topic=PULSAR_TOPIC,
-    schema=generate_billingevent_schema(),
+    schema=cast(pulsar.schema.BytesSchema, generate_billingevent_schema()),
     subscription_name="billing-events-subscription",
 )
 
@@ -27,7 +28,7 @@ try:
             logging.info(billing_event)
             consumer.acknowledge(msg)
         except Exception as e:
-            logging.error("Failed processing message:", e)
+            logging.error("Failed processing message: %s", e)
             consumer.negative_acknowledge(msg)
 except KeyboardInterrupt:
     logging.warning("Interrupted by user. Exiting...")

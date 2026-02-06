@@ -11,24 +11,24 @@ from billing_collector.utils import (
 )
 
 
-def test_bytes_avg_to_gb_seconds():
+def test_bytes_avg_to_gb_seconds() -> None:
     gib = 1024**3
     assert bytes_avg_to_gb_seconds(gib, 1) == 1
     assert bytes_avg_to_gb_seconds(gib, 600) == 600
 
 
-def test_parse_iso_timestamp_ok():
+def test_parse_iso_timestamp_ok() -> None:
     ts = "2025-04-17T10:00:00Z"
     parsed = parse_iso_timestamp(ts)
     assert parsed.isoformat() == "2025-04-17T10:00:00+00:00"
 
 
-def test_parse_iso_timestamp_bad():
-    with pytest.raises(ValueError):
+def test_parse_iso_timestamp_bad() -> None:
+    with pytest.raises(ValueError, match="Invalid ISO8601 timestamp"):
         parse_iso_timestamp("definitely-not-an-iso-date")
 
 
-def test_parse_workspace_name():
+def test_parse_workspace_name() -> None:
     assert parse_workspace_name("ws-foo") == "foo"
     assert parse_workspace_name("ws-bar") == "bar"
     assert parse_workspace_name("ws-") == ""
@@ -37,7 +37,7 @@ def test_parse_workspace_name():
     assert parse_workspace_name("ws-123") == "123"
 
 
-def test_collect_usage():
+def test_collect_usage() -> None:
     mock_producer = mock.MagicMock()
 
     messager = bcm.ResourceUsageMessager(
@@ -70,9 +70,7 @@ def test_collect_usage():
     u = usage["ws-ns1"]
     # CPU
     assert u["cpu"] == 10
-    assert u["requested_cpu"] == 8 * interval  # 8 cores × 600 s
+    assert u["requested_cpu"] == 8 * interval  # 8 cores x 600 s
     # Memory
-    assert u["mem"] == bytes_avg_to_gb_seconds(2 * 1024**3, interval)  # 2 GiB × 600 s → 1200
-    assert u["requested_mem"] == bytes_avg_to_gb_seconds(
-        1 * 1024**3, interval
-    )  # 1 GiB × 600 s → 600
+    assert u["mem"] == bytes_avg_to_gb_seconds(2 * 1024**3, interval)  # 2 GiB x 600 s = 1200
+    assert u["requested_mem"] == bytes_avg_to_gb_seconds(1 * 1024**3, interval)  # 1 GiB x 600 s = 600

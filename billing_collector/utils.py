@@ -10,7 +10,7 @@ def parse_iso_timestamp(iso_time: str) -> datetime:
     Parse an ISO8601 timestamp string into a datetime object.
     """
     try:
-        return datetime.fromisoformat(iso_time.replace("Z", "+00:00"))
+        return datetime.fromisoformat(iso_time)
     except ValueError as e:
         raise ValueError(f"Invalid ISO8601 timestamp: {iso_time}") from e
 
@@ -25,7 +25,7 @@ def parse_workspace_name(workspace: str) -> str:
         return workspace
 
 
-def align_time(dt: datetime, interval_sec: int):
+def align_time(dt: datetime, interval_sec: int) -> datetime:
     """
     Aligns a given datetime object to the nearest lower interval.
     """

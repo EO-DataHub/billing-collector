@@ -1,4 +1,7 @@
-FROM python:3.12-slim-bookworm
+# syntax=docker/dockerfile:1
+FROM ghcr.io/astral-sh/uv:python3.13-trixie-slim
+
+ENV UV_NO_DEV=1
 
 RUN rm -f /etc/apt/apt.conf.d/docker-clean; \
     echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache
@@ -7,12 +10,19 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update -y && apt-get upgrade -y && apt-get install -y git g++
 
-WORKDIR /billing-collector
+WORKDIR /app
 
-ADD LICENSE requirements.txt ./
-ADD billing_collector ./billing_collector/
-ADD pyproject.toml ./
+# Install dependencies
+RUN --mount=type=cache,target=/root/.cache/uv \
+    --mount=type=bind,source=uv.lock,target=uv.lock \
+    --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
+    uv sync --frozen --no-install-project
 
-RUN --mount=type=cache,target=/root/.cache/pip pip3 install -r requirements.txt .
+# Copy project files
+COPY . /app
 
-CMD ["python", "-m", "billing_collector"]
+# Sync the project
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen
+
+CMD ["uv", "run", "--no-sync", "python", "-m", "billing_collector"]
