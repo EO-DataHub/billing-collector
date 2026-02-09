@@ -1,5 +1,6 @@
 import logging
 import os
+from typing import cast
 
 import click
 import pulsar
@@ -18,14 +19,16 @@ PULSAR_TOPIC = os.getenv("PULSAR_TOPIC", "billing-events")
 @click.option("-v", "--verbose", count=True, help="Increase verbosity level.")
 @click.option("--pulsar-url", default=PULSAR_SERVICE_URL, help="URL for Pulsar service.")
 @click.option("--from", "from_time", help="ISO8601 timestamp to start from.")
-def cli(verbose: int, pulsar_url: str, from_time: str):
+def cli(verbose: int, pulsar_url: str, from_time: str) -> None:
     setup_logging(verbosity=verbose, enable_otel_logging=True)
     log_component_version("billing-collector")
 
     logging.info("Starting resource usage messager.")
 
     client = pulsar.Client(pulsar_url)
-    producer = client.create_producer(topic=PULSAR_TOPIC, schema=generate_billingevent_schema())
+    producer = client.create_producer(
+        topic=PULSAR_TOPIC, schema=cast(pulsar.schema.BytesSchema, generate_billingevent_schema())
+    )
 
     messager = ResourceUsageMessager(
         prometheus_url=PROMETHEUS_URL,

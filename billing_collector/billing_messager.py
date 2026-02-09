@@ -1,9 +1,11 @@
 import os
 import time
 import uuid
+from collections.abc import Sequence
 from datetime import datetime, timedelta
-from typing import Sequence
+from typing import Any, cast
 
+import pulsar
 import requests
 from eodhp_utils.messagers import Messager, PulsarJSONMessager
 from eodhp_utils.pulsar.messages import BillingEvent
@@ -23,17 +25,25 @@ class ResourceUsageMessager(PulsarJSONMessager[BillingEvent, BillingEvent]):
     def __init__(
         self,
         prometheus_url: str,
-        start_time: datetime = None,
+        start_time: datetime | None = None,
         explicit_start: bool = False,
-        **kwargs,
-    ):
-        super().__init__(**kwargs)
+        producer: pulsar.Producer | None = None,
+        s3_client: object = None,
+        output_bucket: str | None = None,
+        cat_output_prefix: str = "",
+    ) -> None:
+        super().__init__(
+            producer=producer,
+            s3_client=s3_client,
+            output_bucket=output_bucket,
+            cat_output_prefix=cat_output_prefix,
+        )
         self.prometheus_url = prometheus_url
         self.scrape_interval_sec = SCRAPE_INTERVAL_SEC
         self.start_time = start_time or (datetime.utcnow() - timedelta(hours=1))
         self.explicit_start = explicit_start
 
-    def query_prometheus_range(self, query: str, start: datetime, end: datetime, step: int):
+    def query_prometheus_range(self, query: str, start: datetime, end: datetime, step: int) -> list[dict[str, Any]]:
         """
         Query Prometheus for a range of data including historical.
         """
@@ -50,7 +60,7 @@ class ResourceUsageMessager(PulsarJSONMessager[BillingEvent, BillingEvent]):
         resp.raise_for_status()
         return resp.json().get("data", {}).get("result", [])
 
-    def collect_usage(self, start_time: datetime, end_time: datetime):
+    def collect_usage(self, start_time: datetime, end_time: datetime) -> dict[str, dict[str, float]]:
         """
         Send the Prometheus query to get the usage data for the given time range for CPU and memory.
         """
@@ -85,7 +95,7 @@ class ResourceUsageMessager(PulsarJSONMessager[BillingEvent, BillingEvent]):
             """,
         }
 
-        usage = {}
+        usage: dict[str, dict[str, float]] = {}
         for key, query in queries.items():
             results = self.query_prometheus_range(query, start_time, end_time, interval_sec)
 
@@ -101,14 +111,16 @@ class ResourceUsageMessager(PulsarJSONMessager[BillingEvent, BillingEvent]):
                 if key in ["mem", "requested_mem"]:
                     # Convert bytes to GB-seconds
                     value = bytes_avg_to_gb_seconds(value, interval_sec)
-                elif key in ["requested_cpu"]:
+                elif key == "requested_cpu":
                     value = value * interval_sec
 
                 usage.setdefault(ns, {})[key] = value
 
         return usage
 
-    def send_event(self, workspace, sku, quantity, start, end):
+    def send_event(
+        self, workspace: str, sku: str, quantity: float, start: datetime, end: datetime
+    ) -> Messager.PulsarMessageAction:
         workspace = parse_workspace_name(workspace)
         event_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, f"{workspace}-{sku}-{start.isoformat()}")
         event = BillingEvent(
@@ -120,12 +132,12 @@ class ResourceUsageMessager(PulsarJSONMessager[BillingEvent, BillingEvent]):
             workspace=workspace,
             quantity=round(quantity, 6),
         )
-        return Messager.PulsarMessageAction(payload=event)
+        return Messager.PulsarMessageAction(payload=cast(Any, event))
 
-    def process_payload(self, _: BillingEvent) -> Sequence[Messager.Action]:
+    def process_payload(self, obj: BillingEvent) -> Sequence[Messager.Action]:
         return []
 
-    def run_periodic(self):
+    def run_periodic(self) -> None:
         """
         Run the billing messager periodically aligned to nice intervals (e.g. 00:00, 00:05, 00:10...).
         """
@@ -143,30 +155,25 @@ class ResourceUsageMessager(PulsarJSONMessager[BillingEvent, BillingEvent]):
 
             usage = self.collect_usage(next_run_time, interval_end)
 
-            actions: list[Messager.Action] = []
+            actions: list[Messager.PulsarMessageAction] = []
             for workspace, data in usage.items():
                 cpu_to_bill = max(data.get("cpu", 0), data.get("requested_cpu", 0))
                 mem_to_bill = max(data.get("mem", 0), data.get("requested_mem", 0))
 
                 if cpu_to_bill:
-                    actions.append(
-                        self.send_event(
-                            workspace, "cpu-seconds", cpu_to_bill, next_run_time, interval_end
-                        )
-                    )
+                    actions.append(self.send_event(workspace, "cpu-seconds", cpu_to_bill, next_run_time, interval_end))
                 if mem_to_bill:
                     actions.append(
-                        self.send_event(
-                            workspace, "memory-gb-seconds", mem_to_bill, next_run_time, interval_end
-                        )
+                        self.send_event(workspace, "memory-gb-seconds", mem_to_bill, next_run_time, interval_end)
                     )
 
             for action in actions:
+                payload = cast(BillingEvent, action.payload)
                 with tracer.start_as_current_span(
                     "send_billing_event",
-                    attributes={"workspace": action.payload.workspace, "sku": action.payload.sku},
+                    attributes={"workspace": str(payload.workspace), "sku": str(payload.sku)},
                 ):
-                    token = attach(baggage.set_baggage("workspace", action.payload.workspace))
+                    token = attach(baggage.set_baggage("workspace", str(payload.workspace)))
                     try:
                         self._runaction(action, Messager.CatalogueChanges(), Messager.Failures())
                     finally:
