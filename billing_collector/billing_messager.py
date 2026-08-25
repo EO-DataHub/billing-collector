@@ -7,6 +7,7 @@ from typing import Any, cast
 
 import pulsar
 import requests
+from botocore.client import BaseClient
 from eodhp_utils.messagers import Messager, PulsarJSONMessager
 from eodhp_utils.pulsar.messages import BillingEvent
 from opentelemetry import baggage, trace
@@ -28,7 +29,7 @@ class ResourceUsageMessager(PulsarJSONMessager[BillingEvent, BillingEvent]):
         start_time: datetime | None = None,
         explicit_start: bool = False,
         producer: pulsar.Producer | None = None,
-        s3_client: object = None,
+        s3_client: BaseClient | None = None,
         output_bucket: str | None = None,
         cat_output_prefix: str = "",
     ) -> None:
