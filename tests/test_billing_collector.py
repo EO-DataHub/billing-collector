@@ -55,6 +55,8 @@ def test_collect_usage() -> None:
             [{"metric": {"namespace": "ws-ns1"}, "values": [[0, "8"]]}],
             # requested_mem
             [{"metric": {"namespace": "ws-ns1"}, "values": [[0, str(1 * 1024**3)]]}],
+            # requested_gpu
+            [{"metric": {"namespace": "ws-ns1"}, "values": [[0, "1"]]}],
         ]
     )
 
@@ -65,7 +67,7 @@ def test_collect_usage() -> None:
     usage = messager.collect_usage(start, end)
 
     # Validate the mocked calls explicitly
-    assert messager.query_prometheus_range.call_count == 4
+    assert messager.query_prometheus_range.call_count == 5
 
     u = usage["ws-ns1"]
     # CPU
@@ -74,3 +76,5 @@ def test_collect_usage() -> None:
     # Memory
     assert u["mem"] == bytes_avg_to_gb_seconds(2 * 1024**3, interval)  # 2 GiB x 600 s = 1200
     assert u["requested_mem"] == bytes_avg_to_gb_seconds(1 * 1024**3, interval)  # 1 GiB x 600 s = 600
+    # GPU
+    assert u["requested_gpu"] == 1 * interval  # 1 GPU x 600 s
