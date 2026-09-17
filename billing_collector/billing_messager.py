@@ -94,6 +94,14 @@ class ResourceUsageMessager(PulsarJSONMessager[BillingEvent, BillingEvent]):
                     (kube_pod_status_phase{{phase="Running"}} == 1)
                 )
             """,
+            "requested_gpu": f"""
+                sum by (namespace)(
+                    avg_over_time(kube_pod_container_resource_requests{{namespace=~"{WORKSPACE_NAMESPACE_PREFIX}.*",
+                    resource="nvidia_com_gpu"}}[{interval_sec}s])
+                    * on(namespace, pod) group_left()
+                    (kube_pod_status_phase{{phase="Running"}} == 1)
+                )
+            """,
         }
 
         usage: dict[str, dict[str, float]] = {}
@@ -112,7 +120,7 @@ class ResourceUsageMessager(PulsarJSONMessager[BillingEvent, BillingEvent]):
                 if key in ["mem", "requested_mem"]:
                     # Convert bytes to GB-seconds
                     value = bytes_avg_to_gb_seconds(value, interval_sec)
-                elif key == "requested_cpu":
+                elif key in ["requested_cpu", "requested_gpu"]:
                     value = value * interval_sec
 
                 usage.setdefault(ns, {})[key] = value
@@ -160,6 +168,7 @@ class ResourceUsageMessager(PulsarJSONMessager[BillingEvent, BillingEvent]):
             for workspace, data in usage.items():
                 cpu_to_bill = max(data.get("cpu", 0), data.get("requested_cpu", 0))
                 mem_to_bill = max(data.get("mem", 0), data.get("requested_mem", 0))
+                gpu_to_bill = data.get("requested_gpu", 0)
 
                 if cpu_to_bill:
                     actions.append(self.send_event(workspace, "cpu-seconds", cpu_to_bill, next_run_time, interval_end))
@@ -167,6 +176,8 @@ class ResourceUsageMessager(PulsarJSONMessager[BillingEvent, BillingEvent]):
                     actions.append(
                         self.send_event(workspace, "memory-gb-seconds", mem_to_bill, next_run_time, interval_end)
                     )
+                if gpu_to_bill:
+                    actions.append(self.send_event(workspace, "gpu-seconds", gpu_to_bill, next_run_time, interval_end))
 
             for action in actions:
                 payload = cast(BillingEvent, action.payload)
