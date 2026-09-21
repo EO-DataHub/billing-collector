@@ -102,9 +102,7 @@ class ResourceUsageMessager(PulsarJSONMessager[BillingEvent, BillingEvent]):
         resp.raise_for_status()
         return resp.json().get("data", {}).get("result", [])
 
-    def _collect_usage_with_retry(
-        self, start_time: datetime, end_time: datetime
-    ) -> dict[str, dict[str, float]]:
+    def _collect_usage_with_retry(self, start_time: datetime, end_time: datetime) -> dict[str, dict[str, float]]:
         """
         Collect usage, retrying transient Prometheus failures (timeouts, connection errors) with
         backoff instead of letting a single slow/unresponsive query crash run_periodic outright.
