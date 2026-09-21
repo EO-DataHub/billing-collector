@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import datetime
 
 
 def bytes_avg_to_gb_seconds(avg_bytes: float, interval_sec: int) -> float:
@@ -7,19 +7,12 @@ def bytes_avg_to_gb_seconds(avg_bytes: float, interval_sec: int) -> float:
 
 def parse_iso_timestamp(iso_time: str) -> datetime:
     """
-    Parse an ISO8601 timestamp string into a timezone-aware UTC datetime object.
-
-    A string with no timezone info is assumed to already represent UTC, rather than being
-    interpreted against the system's local timezone.
+    Parse an ISO8601 timestamp string into a datetime object.
     """
     try:
-        parsed = datetime.fromisoformat(iso_time)
+        return datetime.fromisoformat(iso_time)
     except ValueError as e:
         raise ValueError(f"Invalid ISO8601 timestamp: {iso_time}") from e
-
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=UTC)
-    return parsed.astimezone(UTC)
 
 
 def parse_workspace_name(workspace: str) -> str:
@@ -34,11 +27,8 @@ def parse_workspace_name(workspace: str) -> str:
 
 def align_time(dt: datetime, interval_sec: int) -> datetime:
     """
-    Aligns a given timezone-aware datetime object to the nearest lower interval, in UTC.
-
-    dt must carry tzinfo: datetime.timestamp() interprets a naive datetime as local time, which
-    would make the aligned result depend on the system's timezone rather than always meaning UTC.
+    Aligns a given datetime object to the nearest lower interval.
     """
     timestamp = int(dt.timestamp())
     aligned_timestamp = timestamp - (timestamp % interval_sec)
-    return datetime.fromtimestamp(aligned_timestamp, tz=UTC)
+    return datetime.utcfromtimestamp(aligned_timestamp)
