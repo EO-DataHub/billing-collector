@@ -5,6 +5,7 @@ from unittest import mock
 
 import pulsar.exceptions
 import pytest
+import requests.exceptions
 
 from billing_collector import billing_messager as bcm
 from billing_collector.state import CheckpointState
@@ -209,3 +210,55 @@ def test_run_periodic_explicit_start_ignores_checkpoint(tmp_path: Path) -> None:
         messager.run_periodic()
 
     assert seen == [bcm.align_time(explicit_start_time, messager.scrape_interval_sec)]
+
+
+def test_query_prometheus_range_passes_timeout() -> None:
+    mock_producer = mock.MagicMock()
+    messager = bcm.ResourceUsageMessager(prometheus_url="http://mock-prometheus", producer=mock_producer)
+
+    mock_response = mock.MagicMock()
+    mock_response.json.return_value = {"data": {"result": []}}
+
+    with mock.patch("billing_collector.billing_messager.requests.get", return_value=mock_response) as mock_get:
+        messager.query_prometheus_range("up", dt.datetime(2025, 1, 1), dt.datetime(2025, 1, 1, 0, 5), 300)
+
+    assert mock_get.call_args.kwargs["timeout"] == bcm.PROMETHEUS_REQUEST_TIMEOUT_SEC
+
+
+def test_collect_usage_with_retry_recovers_from_transient_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    mock_producer = mock.MagicMock()
+    messager = bcm.ResourceUsageMessager(prometheus_url="http://mock-prometheus", producer=mock_producer)
+
+    sleeps: list[float] = []
+    monkeypatch.setattr(bcm.time, "sleep", lambda s: sleeps.append(s))
+
+    calls = {"n": 0}
+
+    def flaky_collect_usage(start_time: dt.datetime, end_time: dt.datetime) -> dict:
+        calls["n"] += 1
+        if calls["n"] < 2:
+            raise requests.exceptions.Timeout("transient")
+        return {"ws-ns1": {"cpu": 1.0}}
+
+    messager.collect_usage = mock.MagicMock(side_effect=flaky_collect_usage)  # type: ignore[method-assign]
+
+    result = messager._collect_usage_with_retry(dt.datetime(2025, 1, 1), dt.datetime(2025, 1, 1, 0, 5))
+
+    assert result == {"ws-ns1": {"cpu": 1.0}}
+    assert calls["n"] == 2
+    assert len(sleeps) == 1
+
+
+def test_collect_usage_with_retry_gives_up_after_max_attempts(monkeypatch: pytest.MonkeyPatch) -> None:
+    mock_producer = mock.MagicMock()
+    messager = bcm.ResourceUsageMessager(prometheus_url="http://mock-prometheus", producer=mock_producer)
+    monkeypatch.setattr(bcm.time, "sleep", lambda s: None)
+
+    messager.collect_usage = mock.MagicMock(  # type: ignore[method-assign]
+        side_effect=requests.exceptions.ConnectionError("always fails")
+    )
+
+    with pytest.raises(requests.exceptions.RequestException):
+        messager._collect_usage_with_retry(dt.datetime(2025, 1, 1), dt.datetime(2025, 1, 1, 0, 5))
+
+    assert messager.collect_usage.call_count == bcm.PROMETHEUS_QUERY_RETRY_ATTEMPTS
