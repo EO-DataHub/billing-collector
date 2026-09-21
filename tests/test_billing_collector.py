@@ -33,6 +33,11 @@ def test_parse_iso_timestamp_bad() -> None:
         parse_iso_timestamp("definitely-not-an-iso-date")
 
 
+def test_parse_iso_timestamp_assumes_utc_when_no_tz_given() -> None:
+    parsed = parse_iso_timestamp("2025-04-17T10:00:00")
+    assert parsed.isoformat() == "2025-04-17T10:00:00+00:00"
+
+
 def test_parse_workspace_name() -> None:
     assert parse_workspace_name("ws-foo") == "foo"
     assert parse_workspace_name("ws-bar") == "bar"
@@ -40,6 +45,16 @@ def test_parse_workspace_name() -> None:
     assert parse_workspace_name("foo") == "foo"
     assert parse_workspace_name("") == ""
     assert parse_workspace_name("ws-123") == "123"
+
+
+def test_align_time_is_independent_of_input_offset() -> None:
+    # Same instant expressed in two different offsets must align to the same UTC result.
+    utc_dt = dt.datetime(2025, 4, 17, 10, 7, 30, tzinfo=dt.UTC)
+    plus_two_dt = utc_dt.astimezone(dt.timezone(dt.timedelta(hours=2)))
+
+    expected = dt.datetime(2025, 4, 17, 10, 5, 0, tzinfo=dt.UTC)
+    assert bcm.align_time(utc_dt, 300) == expected
+    assert bcm.align_time(plus_two_dt, 300) == expected
 
 
 def test_collect_usage() -> None:
@@ -65,7 +80,7 @@ def test_collect_usage() -> None:
         ]
     )
 
-    start = dt.datetime(2025, 4, 17, 0, 0, 0)
+    start = dt.datetime(2025, 4, 17, 0, 0, 0, tzinfo=dt.UTC)
     end = start + dt.timedelta(seconds=600)
     interval = int((end - start).total_seconds())
 
@@ -120,7 +135,11 @@ def test_send_with_retry_recovers_from_transient_failure(monkeypatch: pytest.Mon
     messager._runaction = mock.MagicMock(side_effect=flaky_runaction)  # type: ignore[method-assign]
 
     action = messager.send_event(
-        "ws-foo", "cpu-seconds", 1.0, dt.datetime(2025, 1, 1), dt.datetime(2025, 1, 1, 0, 5)
+        "ws-foo",
+        "cpu-seconds",
+        1.0,
+        dt.datetime(2025, 1, 1, tzinfo=dt.UTC),
+        dt.datetime(2025, 1, 1, 0, 5, tzinfo=dt.UTC),
     )
     messager._send_with_retry(action)
 
@@ -138,7 +157,11 @@ def test_send_with_retry_gives_up_after_max_attempts(monkeypatch: pytest.MonkeyP
     )
 
     action = messager.send_event(
-        "ws-foo", "cpu-seconds", 1.0, dt.datetime(2025, 1, 1), dt.datetime(2025, 1, 1, 0, 5)
+        "ws-foo",
+        "cpu-seconds",
+        1.0,
+        dt.datetime(2025, 1, 1, tzinfo=dt.UTC),
+        dt.datetime(2025, 1, 1, 0, 5, tzinfo=dt.UTC),
     )
 
     with pytest.raises(pulsar.exceptions.PulsarException):
@@ -149,7 +172,7 @@ def test_send_with_retry_gives_up_after_max_attempts(monkeypatch: pytest.MonkeyP
 
 def test_run_periodic_resumes_from_checkpoint_over_default_start(tmp_path: Path) -> None:
     state_file = str(tmp_path / "state.json")
-    checkpoint_time = dt.datetime(2025, 1, 1, 0, 10, 0)
+    checkpoint_time = dt.datetime(2025, 1, 1, 0, 10, 0, tzinfo=dt.UTC)
     with open(state_file, "w") as f:
         json.dump({"next_run_time": checkpoint_time.isoformat()}, f)
 
@@ -157,7 +180,8 @@ def test_run_periodic_resumes_from_checkpoint_over_default_start(tmp_path: Path)
     messager = bcm.ResourceUsageMessager(
         prometheus_url="http://mock-prometheus",
         producer=mock_producer,
-        start_time=dt.datetime(2000, 1, 1),  # would be used if the checkpoint were ignored
+        # Would be used if the checkpoint were ignored:
+        start_time=dt.datetime(2000, 1, 1, tzinfo=dt.UTC),
         explicit_start=False,
         state_file=state_file,
     )
@@ -181,11 +205,11 @@ def test_run_periodic_resumes_from_checkpoint_over_default_start(tmp_path: Path)
 
 def test_run_periodic_explicit_start_ignores_checkpoint(tmp_path: Path) -> None:
     state_file = str(tmp_path / "state.json")
-    checkpoint_time = dt.datetime(2025, 1, 1, 0, 10, 0)
+    checkpoint_time = dt.datetime(2025, 1, 1, 0, 10, 0, tzinfo=dt.UTC)
     with open(state_file, "w") as f:
         json.dump({"next_run_time": checkpoint_time.isoformat()}, f)
 
-    explicit_start_time = dt.datetime(2024, 6, 1, 0, 0, 0)
+    explicit_start_time = dt.datetime(2024, 6, 1, 0, 0, 0, tzinfo=dt.UTC)
     mock_producer = mock.MagicMock()
     messager = bcm.ResourceUsageMessager(
         prometheus_url="http://mock-prometheus",
@@ -220,7 +244,9 @@ def test_query_prometheus_range_passes_timeout() -> None:
     mock_response.json.return_value = {"data": {"result": []}}
 
     with mock.patch("billing_collector.billing_messager.requests.get", return_value=mock_response) as mock_get:
-        messager.query_prometheus_range("up", dt.datetime(2025, 1, 1), dt.datetime(2025, 1, 1, 0, 5), 300)
+        messager.query_prometheus_range(
+            "up", dt.datetime(2025, 1, 1, tzinfo=dt.UTC), dt.datetime(2025, 1, 1, 0, 5, tzinfo=dt.UTC), 300
+        )
 
     assert mock_get.call_args.kwargs["timeout"] == bcm.PROMETHEUS_REQUEST_TIMEOUT_SEC
 
@@ -242,7 +268,9 @@ def test_collect_usage_with_retry_recovers_from_transient_failure(monkeypatch: p
 
     messager.collect_usage = mock.MagicMock(side_effect=flaky_collect_usage)  # type: ignore[method-assign]
 
-    result = messager._collect_usage_with_retry(dt.datetime(2025, 1, 1), dt.datetime(2025, 1, 1, 0, 5))
+    result = messager._collect_usage_with_retry(
+        dt.datetime(2025, 1, 1, tzinfo=dt.UTC), dt.datetime(2025, 1, 1, 0, 5, tzinfo=dt.UTC)
+    )
 
     assert result == {"ws-ns1": {"cpu": 1.0}}
     assert calls["n"] == 2
@@ -259,6 +287,8 @@ def test_collect_usage_with_retry_gives_up_after_max_attempts(monkeypatch: pytes
     )
 
     with pytest.raises(requests.exceptions.RequestException):
-        messager._collect_usage_with_retry(dt.datetime(2025, 1, 1), dt.datetime(2025, 1, 1, 0, 5))
+        messager._collect_usage_with_retry(
+            dt.datetime(2025, 1, 1, tzinfo=dt.UTC), dt.datetime(2025, 1, 1, 0, 5, tzinfo=dt.UTC)
+        )
 
     assert messager.collect_usage.call_count == bcm.PROMETHEUS_QUERY_RETRY_ATTEMPTS

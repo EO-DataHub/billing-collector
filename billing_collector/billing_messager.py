@@ -4,7 +4,7 @@ import os
 import time
 import uuid
 from collections.abc import Sequence
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 import pulsar
@@ -52,7 +52,7 @@ class ResourceUsageMessager(PulsarJSONMessager[BillingEvent, BillingEvent]):
         )
         self.prometheus_url = prometheus_url
         self.scrape_interval_sec = SCRAPE_INTERVAL_SEC
-        self.start_time = start_time or (datetime.utcnow() - timedelta(hours=1))
+        self.start_time = start_time or (datetime.now(UTC) - timedelta(hours=1))
         self.explicit_start = explicit_start
         self.state_file = state_file
 
@@ -169,11 +169,15 @@ class ResourceUsageMessager(PulsarJSONMessager[BillingEvent, BillingEvent]):
         self, workspace: str, sku: str, quantity: float, start: datetime, end: datetime
     ) -> Messager.PulsarMessageAction:
         workspace = parse_workspace_name(workspace)
-        event_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, f"{workspace}-{sku}-{start.isoformat()}")
+        # Normalise to a UTC, offset-less ISO string (start/end are expected to carry tzinfo) so
+        # the wire format and derived UUID stay stable regardless of the system's local timezone.
+        start_iso = start.astimezone(UTC).replace(tzinfo=None).isoformat()
+        end_iso = end.astimezone(UTC).replace(tzinfo=None).isoformat()
+        event_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, f"{workspace}-{sku}-{start_iso}")
         event = BillingEvent(
             uuid=str(event_uuid),
-            event_start=start.isoformat() + "Z",
-            event_end=end.isoformat() + "Z",
+            event_start=start_iso + "Z",
+            event_end=end_iso + "Z",
             sku=sku,
             user=None,
             workspace=workspace,
@@ -221,7 +225,7 @@ class ResourceUsageMessager(PulsarJSONMessager[BillingEvent, BillingEvent]):
             next_run_time = align_time(start_time.replace(microsecond=0), self.scrape_interval_sec)
 
             while True:
-                current_time = datetime.utcnow() - timedelta(seconds=DATA_COMPLETENESS_DELAY_SEC)
+                current_time = datetime.now(UTC) - timedelta(seconds=DATA_COMPLETENESS_DELAY_SEC)
                 interval_end = next_run_time + timedelta(seconds=self.scrape_interval_sec)
 
                 if interval_end > current_time:
@@ -268,7 +272,7 @@ class ResourceUsageMessager(PulsarJSONMessager[BillingEvent, BillingEvent]):
                     state.mark_next_run_time(next_run_time.isoformat())
 
                 # If running as a recovery job, exit when caught up
-                if self.explicit_start and next_run_time >= datetime.utcnow() - timedelta(
+                if self.explicit_start and next_run_time >= datetime.now(UTC) - timedelta(
                     seconds=DATA_COMPLETENESS_DELAY_SEC
                 ):
                     break
