@@ -3,7 +3,7 @@ import logging
 import os
 import time
 import uuid
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
@@ -30,6 +30,34 @@ PROMETHEUS_QUERY_RETRY_ATTEMPTS = int(os.getenv("PROMETHEUS_QUERY_RETRY_ATTEMPTS
 PROMETHEUS_QUERY_RETRY_BACKOFF_SEC = float(os.getenv("PROMETHEUS_QUERY_RETRY_BACKOFF_SEC", "5"))
 
 tracer = trace.get_tracer("billing-collector")
+
+
+def _retry_with_backoff[T](
+    fn: Callable[[], T],
+    retry_exceptions: type[BaseException] | tuple[type[BaseException], ...],
+    attempts: int,
+    backoff_sec: float,
+    label: str,
+) -> T:
+    """Call fn(), retrying on retry_exceptions with exponential backoff. Always tries at least once."""
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            return fn()
+        except retry_exceptions:
+            if attempt >= attempts:
+                raise
+            backoff = backoff_sec * (2 ** (attempt - 1))
+            logging.warning(
+                "%s failed (attempt %d/%d), retrying in %.1fs",
+                label,
+                attempt,
+                attempts,
+                backoff,
+                exc_info=True,
+            )
+            time.sleep(backoff)
 
 
 class ResourceUsageMessager(PulsarJSONMessager[BillingEvent, BillingEvent]):
@@ -80,24 +108,15 @@ class ResourceUsageMessager(PulsarJSONMessager[BillingEvent, BillingEvent]):
         """
         Collect usage, retrying transient Prometheus failures (timeouts, connection errors) with
         backoff instead of letting a single slow/unresponsive query crash run_periodic outright.
+        Permanent failures (e.g. a 4xx from a bad query) are not retried.
         """
-        attempt = 0
-        while True:
-            attempt += 1
-            try:
-                return self.collect_usage(start_time, end_time)
-            except requests.exceptions.RequestException:
-                if attempt >= PROMETHEUS_QUERY_RETRY_ATTEMPTS:
-                    raise
-                backoff = PROMETHEUS_QUERY_RETRY_BACKOFF_SEC * (2 ** (attempt - 1))
-                logging.warning(
-                    "Prometheus query failed (attempt %d/%d), retrying in %.1fs",
-                    attempt,
-                    PROMETHEUS_QUERY_RETRY_ATTEMPTS,
-                    backoff,
-                    exc_info=True,
-                )
-                time.sleep(backoff)
+        return _retry_with_backoff(
+            lambda: self.collect_usage(start_time, end_time),
+            (requests.exceptions.ConnectionError, requests.exceptions.Timeout),
+            PROMETHEUS_QUERY_RETRY_ATTEMPTS,
+            PROMETHEUS_QUERY_RETRY_BACKOFF_SEC,
+            "Prometheus query",
+        )
 
     def collect_usage(self, start_time: datetime, end_time: datetime) -> dict[str, dict[str, float]]:
         """
@@ -193,22 +212,13 @@ class ResourceUsageMessager(PulsarJSONMessager[BillingEvent, BillingEvent]):
         Send a single action, retrying transient Pulsar failures with backoff instead of letting
         them crash run_periodic and discard the rest of the current window's progress.
         """
-        for attempt in range(1, PULSAR_SEND_RETRY_ATTEMPTS + 1):
-            try:
-                self._runaction(action, Messager.CatalogueChanges(), Messager.Failures())
-                return
-            except pulsar.exceptions.PulsarException:
-                if attempt == PULSAR_SEND_RETRY_ATTEMPTS:
-                    raise
-                backoff = PULSAR_SEND_RETRY_BACKOFF_SEC * (2 ** (attempt - 1))
-                logging.warning(
-                    "Pulsar send failed (attempt %d/%d), retrying in %.1fs",
-                    attempt,
-                    PULSAR_SEND_RETRY_ATTEMPTS,
-                    backoff,
-                    exc_info=True,
-                )
-                time.sleep(backoff)
+        _retry_with_backoff(
+            lambda: self._runaction(action, Messager.CatalogueChanges(), Messager.Failures()),
+            pulsar.exceptions.PulsarException,
+            PULSAR_SEND_RETRY_ATTEMPTS,
+            PULSAR_SEND_RETRY_BACKOFF_SEC,
+            "Pulsar send",
+        )
 
     def run_periodic(self) -> None:
         """
