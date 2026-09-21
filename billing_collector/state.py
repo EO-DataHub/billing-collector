@@ -20,20 +20,18 @@ class CheckpointState:
         self.next_run_time: str | None = None
 
     def __enter__(self) -> Self:
-        directory = os.path.dirname(self.file_location) or "."
-        os.makedirs(directory, exist_ok=True)
+        if not os.path.exists(self.file_location):
+            os.makedirs(os.path.dirname(self.file_location) or ".", exist_ok=True)
+            with open(self.file_location, "w") as f:
+                json.dump({"next_run_time": None}, f)
 
-        # Locked separately from the data file itself, since _flush() replaces the data
-        # file's inode on every write and a lock held on a replaced inode no longer
-        # excludes other processes opening the new one.
-        self.lock_f = open(f"{self.file_location}.lock", "w")
-        fcntl.flock(self.lock_f, fcntl.LOCK_EX)
-
+        self.f = open(self.file_location, "r+")
+        fcntl.flock(self.f, fcntl.LOCK_EX)
         try:
-            with open(self.file_location) as f:
-                data = json.load(f)
-                self.next_run_time = data.get("next_run_time")
-        except (FileNotFoundError, json.JSONDecodeError):
+            self.f.seek(0)
+            data = json.load(self.f)
+            self.next_run_time = data.get("next_run_time")
+        except json.JSONDecodeError:
             self.next_run_time = None
         return self
 
@@ -43,19 +41,11 @@ class CheckpointState:
         self._flush()
 
     def _flush(self) -> None:
-        directory = os.path.dirname(self.file_location) or "."
-        tmp_path = f"{self.file_location}.tmp"
-        with open(tmp_path, "w") as tmp_f:
-            json.dump({"next_run_time": self.next_run_time}, tmp_f, indent=2)
-            tmp_f.flush()
-            os.fsync(tmp_f.fileno())
-        os.replace(tmp_path, self.file_location)
-
-        dir_fd = os.open(directory, os.O_RDONLY)
-        try:
-            os.fsync(dir_fd)
-        finally:
-            os.close(dir_fd)
+        self.f.seek(0)
+        json.dump({"next_run_time": self.next_run_time}, self.f, indent=2)
+        self.f.truncate()
+        self.f.flush()
+        os.fsync(self.f.fileno())
 
     def __exit__(
         self,
@@ -63,5 +53,5 @@ class CheckpointState:
         exc_value: BaseException | None,
         traceback: types.TracebackType | None,
     ) -> None:
-        fcntl.flock(self.lock_f, fcntl.LOCK_UN)
-        self.lock_f.close()
+        fcntl.flock(self.f, fcntl.LOCK_UN)
+        self.f.close()
