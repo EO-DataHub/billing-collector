@@ -60,7 +60,7 @@ class ResourceUsageMessager(PulsarJSONMessager[BillingEvent, BillingEvent]):
         """
         Query Prometheus for a range of data including historical.
         """
-        print(f"Querying Prometheus: from {start} to {end} with step {step}")
+        logging.debug("Querying Prometheus: from %s to %s with step %s", start, end, step)
         resp = requests.get(
             f"{self.prometheus_url}/api/v1/query_range",
             params={
