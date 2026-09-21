@@ -13,19 +13,13 @@ from .utils import parse_iso_timestamp
 PROMETHEUS_URL = os.getenv("PROMETHEUS_URL", "http://localhost:9090")
 PULSAR_SERVICE_URL = os.getenv("PULSAR_SERVICE_URL", "pulsar://localhost:6650")
 PULSAR_TOPIC = os.getenv("PULSAR_TOPIC", "billing-events")
-STATE_FILE = os.getenv("STATE_FILE")
 
 
 @click.command()
 @click.option("-v", "--verbose", count=True, help="Increase verbosity level.")
 @click.option("--pulsar-url", default=PULSAR_SERVICE_URL, help="URL for Pulsar service.")
 @click.option("--from", "from_time", help="ISO8601 timestamp to start from.")
-@click.option(
-    "--state-file",
-    default=STATE_FILE,
-    help="Path to a checkpoint file used to resume from the last billed window after a restart.",
-)
-def cli(verbose: int, pulsar_url: str, from_time: str, state_file: str | None) -> None:
+def cli(verbose: int, pulsar_url: str, from_time: str) -> None:
     setup_logging(verbosity=verbose, enable_otel_logging=True)
     log_component_version("billing-collector")
 
@@ -41,7 +35,6 @@ def cli(verbose: int, pulsar_url: str, from_time: str, state_file: str | None) -
         producer=producer,
         start_time=parse_iso_timestamp(from_time) if from_time else None,
         explicit_start=bool(from_time),
-        state_file=state_file,
     )
 
     try:
