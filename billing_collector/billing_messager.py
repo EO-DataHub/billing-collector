@@ -10,7 +10,6 @@ from typing import Any, cast
 import pulsar
 import pulsar.exceptions
 import requests
-import requests.exceptions
 from botocore.client import BaseClient
 from eodhp_utils.messagers import Messager, PulsarJSONMessager
 from eodhp_utils.pulsar.messages import BillingEvent
@@ -25,9 +24,6 @@ SCRAPE_INTERVAL_SEC = int(os.getenv("SCRAPE_INTERVAL_SEC", "300"))
 DATA_COMPLETENESS_DELAY_SEC = int(os.getenv("DATA_COMPLETENESS_DELAY_SEC", "60"))
 PULSAR_SEND_RETRY_ATTEMPTS = int(os.getenv("PULSAR_SEND_RETRY_ATTEMPTS", "5"))
 PULSAR_SEND_RETRY_BACKOFF_SEC = float(os.getenv("PULSAR_SEND_RETRY_BACKOFF_SEC", "2"))
-PROMETHEUS_REQUEST_TIMEOUT_SEC = float(os.getenv("PROMETHEUS_REQUEST_TIMEOUT_SEC", "30"))
-PROMETHEUS_QUERY_RETRY_ATTEMPTS = int(os.getenv("PROMETHEUS_QUERY_RETRY_ATTEMPTS", "3"))
-PROMETHEUS_QUERY_RETRY_BACKOFF_SEC = float(os.getenv("PROMETHEUS_QUERY_RETRY_BACKOFF_SEC", "5"))
 
 tracer = trace.get_tracer("billing-collector")
 
@@ -69,35 +65,9 @@ class ResourceUsageMessager(PulsarJSONMessager[BillingEvent, BillingEvent]):
                 "end": end.timestamp(),
                 "step": step,
             },
-            timeout=PROMETHEUS_REQUEST_TIMEOUT_SEC,
         )
         resp.raise_for_status()
         return resp.json().get("data", {}).get("result", [])
-
-    def _collect_usage_with_retry(
-        self, start_time: datetime, end_time: datetime
-    ) -> dict[str, dict[str, float]]:
-        """
-        Collect usage, retrying transient Prometheus failures (timeouts, connection errors) with
-        backoff instead of letting a single slow/unresponsive query crash run_periodic outright.
-        """
-        attempt = 0
-        while True:
-            attempt += 1
-            try:
-                return self.collect_usage(start_time, end_time)
-            except requests.exceptions.RequestException:
-                if attempt >= PROMETHEUS_QUERY_RETRY_ATTEMPTS:
-                    raise
-                backoff = PROMETHEUS_QUERY_RETRY_BACKOFF_SEC * (2 ** (attempt - 1))
-                logging.warning(
-                    "Prometheus query failed (attempt %d/%d), retrying in %.1fs",
-                    attempt,
-                    PROMETHEUS_QUERY_RETRY_ATTEMPTS,
-                    backoff,
-                    exc_info=True,
-                )
-                time.sleep(backoff)
 
     def collect_usage(self, start_time: datetime, end_time: datetime) -> dict[str, dict[str, float]]:
         """
@@ -230,7 +200,7 @@ class ResourceUsageMessager(PulsarJSONMessager[BillingEvent, BillingEvent]):
                     time.sleep(max(sleep_duration, 0))
                     continue
 
-                usage = self._collect_usage_with_retry(next_run_time, interval_end)
+                usage = self.collect_usage(next_run_time, interval_end)
 
                 actions: list[Messager.PulsarMessageAction] = []
                 for workspace, data in usage.items():
