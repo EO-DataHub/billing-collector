@@ -8,6 +8,7 @@ from eodhp_utils.pulsar.messages import generate_billingevent_schema
 from eodhp_utils.runner import log_component_version, setup_logging
 
 from .billing_messager import ResourceUsageMessager
+from .pulsar_auth import pulsar_authentication
 from .utils import parse_iso_timestamp
 
 PROMETHEUS_URL = os.getenv("PROMETHEUS_URL", "http://localhost:9090")
@@ -25,7 +26,7 @@ def cli(verbose: int, pulsar_url: str, from_time: str) -> None:
 
     logging.info("Starting resource usage messager.")
 
-    client = pulsar.Client(pulsar_url)
+    client = pulsar.Client(pulsar_url, authentication=pulsar_authentication())
     producer = client.create_producer(
         topic=PULSAR_TOPIC, schema=cast(pulsar.schema.BytesSchema, generate_billingevent_schema())
     )
