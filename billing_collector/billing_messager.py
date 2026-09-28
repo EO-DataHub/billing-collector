@@ -1,25 +1,63 @@
+import contextlib
+import logging
 import os
 import time
 import uuid
-from collections.abc import Sequence
-from datetime import datetime, timedelta
+from collections.abc import Callable, Sequence
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 import pulsar
+import pulsar.exceptions
 import requests
+import requests.exceptions
 from botocore.client import BaseClient
 from eodhp_utils.messagers import Messager, PulsarJSONMessager
 from eodhp_utils.pulsar.messages import BillingEvent
 from opentelemetry import baggage, trace
 from opentelemetry.context import attach, detach
 
-from .utils import align_time, bytes_avg_to_gb_seconds, parse_workspace_name
+from .state import CheckpointState
+from .utils import align_time, bytes_avg_to_gb_seconds, parse_iso_timestamp, parse_workspace_name
 
 WORKSPACE_NAMESPACE_PREFIX = os.getenv("WORKSPACE_NAMESPACE_PREFIX", "ws-")
 SCRAPE_INTERVAL_SEC = int(os.getenv("SCRAPE_INTERVAL_SEC", "300"))
 DATA_COMPLETENESS_DELAY_SEC = int(os.getenv("DATA_COMPLETENESS_DELAY_SEC", "60"))
+PULSAR_SEND_RETRY_ATTEMPTS = int(os.getenv("PULSAR_SEND_RETRY_ATTEMPTS", "5"))
+PULSAR_SEND_RETRY_BACKOFF_SEC = float(os.getenv("PULSAR_SEND_RETRY_BACKOFF_SEC", "2"))
+PROMETHEUS_REQUEST_TIMEOUT_SEC = float(os.getenv("PROMETHEUS_REQUEST_TIMEOUT_SEC", "30"))
+PROMETHEUS_QUERY_RETRY_ATTEMPTS = int(os.getenv("PROMETHEUS_QUERY_RETRY_ATTEMPTS", "3"))
+PROMETHEUS_QUERY_RETRY_BACKOFF_SEC = float(os.getenv("PROMETHEUS_QUERY_RETRY_BACKOFF_SEC", "5"))
 
 tracer = trace.get_tracer("billing-collector")
+
+
+def _retry_with_backoff[T](
+    fn: Callable[[], T],
+    retry_exceptions: type[BaseException] | tuple[type[BaseException], ...],
+    attempts: int,
+    backoff_sec: float,
+    label: str,
+) -> T:
+    """Call fn(), retrying on retry_exceptions with exponential backoff. Always tries at least once."""
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            return fn()
+        except retry_exceptions:
+            if attempt >= attempts:
+                raise
+            backoff = backoff_sec * (2 ** (attempt - 1))
+            logging.warning(
+                "%s failed (attempt %d/%d), retrying in %.1fs",
+                label,
+                attempt,
+                attempts,
+                backoff,
+                exc_info=True,
+            )
+            time.sleep(backoff)
 
 
 class ResourceUsageMessager(PulsarJSONMessager[BillingEvent, BillingEvent]):
@@ -32,6 +70,7 @@ class ResourceUsageMessager(PulsarJSONMessager[BillingEvent, BillingEvent]):
         s3_client: BaseClient | None = None,
         output_bucket: str | None = None,
         cat_output_prefix: str = "",
+        state_file: str | None = None,
     ) -> None:
         super().__init__(
             producer=producer,
@@ -41,14 +80,15 @@ class ResourceUsageMessager(PulsarJSONMessager[BillingEvent, BillingEvent]):
         )
         self.prometheus_url = prometheus_url
         self.scrape_interval_sec = SCRAPE_INTERVAL_SEC
-        self.start_time = start_time or (datetime.utcnow() - timedelta(hours=1))
+        self.start_time = start_time or (datetime.now(UTC) - timedelta(hours=1))
         self.explicit_start = explicit_start
+        self.state_file = state_file
 
     def query_prometheus_range(self, query: str, start: datetime, end: datetime, step: int) -> list[dict[str, Any]]:
         """
         Query Prometheus for a range of data including historical.
         """
-        print(f"Querying Prometheus: from {start} to {end} with step {step}")
+        logging.debug("Querying Prometheus: from %s to %s with step %s", start, end, step)
         resp = requests.get(
             f"{self.prometheus_url}/api/v1/query_range",
             params={
@@ -57,9 +97,24 @@ class ResourceUsageMessager(PulsarJSONMessager[BillingEvent, BillingEvent]):
                 "end": end.timestamp(),
                 "step": step,
             },
+            timeout=PROMETHEUS_REQUEST_TIMEOUT_SEC,
         )
         resp.raise_for_status()
         return resp.json().get("data", {}).get("result", [])
+
+    def _collect_usage_with_retry(self, start_time: datetime, end_time: datetime) -> dict[str, dict[str, float]]:
+        """
+        Collect usage, retrying transient Prometheus failures (timeouts, connection errors) with
+        backoff instead of letting a single slow/unresponsive query crash run_periodic outright.
+        Permanent failures (e.g. a 4xx from a bad query) are not retried.
+        """
+        return _retry_with_backoff(
+            lambda: self.collect_usage(start_time, end_time),
+            (requests.exceptions.ConnectionError, requests.exceptions.Timeout),
+            PROMETHEUS_QUERY_RETRY_ATTEMPTS,
+            PROMETHEUS_QUERY_RETRY_BACKOFF_SEC,
+            "Prometheus query",
+        )
 
     def collect_usage(self, start_time: datetime, end_time: datetime) -> dict[str, dict[str, float]]:
         """
@@ -131,11 +186,15 @@ class ResourceUsageMessager(PulsarJSONMessager[BillingEvent, BillingEvent]):
         self, workspace: str, sku: str, quantity: float, start: datetime, end: datetime
     ) -> Messager.PulsarMessageAction:
         workspace = parse_workspace_name(workspace)
-        event_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, f"{workspace}-{sku}-{start.isoformat()}")
+        # Normalise to a UTC, offset-less ISO string (start/end are expected to carry tzinfo) so
+        # the wire format and derived UUID stay stable regardless of the system's local timezone.
+        start_iso = start.astimezone(UTC).replace(tzinfo=None).isoformat()
+        end_iso = end.astimezone(UTC).replace(tzinfo=None).isoformat()
+        event_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, f"{workspace}-{sku}-{start_iso}")
         event = BillingEvent(
             uuid=str(event_uuid),
-            event_start=start.isoformat() + "Z",
-            event_end=end.isoformat() + "Z",
+            event_start=start_iso + "Z",
+            event_end=end_iso + "Z",
             sku=sku,
             user=None,
             workspace=workspace,
@@ -146,55 +205,82 @@ class ResourceUsageMessager(PulsarJSONMessager[BillingEvent, BillingEvent]):
     def process_payload(self, obj: BillingEvent) -> Sequence[Messager.Action]:
         return []
 
+    def _send_with_retry(self, action: Messager.PulsarMessageAction) -> None:
+        """
+        Send a single action, retrying transient Pulsar failures with backoff instead of letting
+        them crash run_periodic and discard the rest of the current window's progress.
+        """
+        _retry_with_backoff(
+            lambda: self._runaction(action, Messager.CatalogueChanges(), Messager.Failures()),
+            pulsar.exceptions.PulsarException,
+            PULSAR_SEND_RETRY_ATTEMPTS,
+            PULSAR_SEND_RETRY_BACKOFF_SEC,
+            "Pulsar send",
+        )
+
     def run_periodic(self) -> None:
         """
         Run the billing messager periodically aligned to nice intervals (e.g. 00:00, 00:05, 00:10...).
         """
-        next_run_time = align_time(self.start_time.replace(microsecond=0), self.scrape_interval_sec)
+        with contextlib.ExitStack() as stack:
+            state = stack.enter_context(CheckpointState(self.state_file)) if self.state_file else None
 
-        while True:
-            current_time = datetime.utcnow() - timedelta(seconds=DATA_COMPLETENESS_DELAY_SEC)
-            interval_end = next_run_time + timedelta(seconds=self.scrape_interval_sec)
+            start_time = self.start_time
+            if state and not self.explicit_start and state.next_run_time:
+                start_time = parse_iso_timestamp(state.next_run_time)
+                logging.info("Resuming from checkpoint: %s", start_time)
 
-            if interval_end > current_time:
-                # Sleep exactly until the aligned interval is complete
-                sleep_duration = (interval_end - current_time).total_seconds()
-                time.sleep(max(sleep_duration, 0))
-                continue
+            next_run_time = align_time(start_time.replace(microsecond=0), self.scrape_interval_sec)
 
-            usage = self.collect_usage(next_run_time, interval_end)
+            while True:
+                current_time = datetime.now(UTC) - timedelta(seconds=DATA_COMPLETENESS_DELAY_SEC)
+                interval_end = next_run_time + timedelta(seconds=self.scrape_interval_sec)
 
-            actions: list[Messager.PulsarMessageAction] = []
-            for workspace, data in usage.items():
-                cpu_to_bill = max(data.get("cpu", 0), data.get("requested_cpu", 0))
-                mem_to_bill = max(data.get("mem", 0), data.get("requested_mem", 0))
-                gpu_to_bill = data.get("requested_gpu", 0)
+                if interval_end > current_time:
+                    # Sleep exactly until the aligned interval is complete
+                    sleep_duration = (interval_end - current_time).total_seconds()
+                    time.sleep(max(sleep_duration, 0))
+                    continue
 
-                if cpu_to_bill:
-                    actions.append(self.send_event(workspace, "cpu-seconds", cpu_to_bill, next_run_time, interval_end))
-                if mem_to_bill:
-                    actions.append(
-                        self.send_event(workspace, "memory-gb-seconds", mem_to_bill, next_run_time, interval_end)
-                    )
-                if gpu_to_bill:
-                    actions.append(self.send_event(workspace, "gpu-seconds", gpu_to_bill, next_run_time, interval_end))
+                usage = self._collect_usage_with_retry(next_run_time, interval_end)
 
-            for action in actions:
-                payload = cast(BillingEvent, action.payload)
-                with tracer.start_as_current_span(
-                    "send_billing_event",
-                    attributes={"workspace": str(payload.workspace), "sku": str(payload.sku)},
+                actions: list[Messager.PulsarMessageAction] = []
+                for workspace, data in usage.items():
+                    cpu_to_bill = max(data.get("cpu", 0), data.get("requested_cpu", 0))
+                    mem_to_bill = max(data.get("mem", 0), data.get("requested_mem", 0))
+                    gpu_to_bill = data.get("requested_gpu", 0)
+
+                    if cpu_to_bill:
+                        actions.append(
+                            self.send_event(workspace, "cpu-seconds", cpu_to_bill, next_run_time, interval_end)
+                        )
+                    if mem_to_bill:
+                        actions.append(
+                            self.send_event(workspace, "memory-gb-seconds", mem_to_bill, next_run_time, interval_end)
+                        )
+                    if gpu_to_bill:
+                        actions.append(
+                            self.send_event(workspace, "gpu-seconds", gpu_to_bill, next_run_time, interval_end)
+                        )
+
+                for action in actions:
+                    payload = cast(BillingEvent, action.payload)
+                    with tracer.start_as_current_span(
+                        "send_billing_event",
+                        attributes={"workspace": str(payload.workspace), "sku": str(payload.sku)},
+                    ):
+                        token = attach(baggage.set_baggage("workspace", str(payload.workspace)))
+                        try:
+                            self._send_with_retry(action)
+                        finally:
+                            detach(token)
+
+                next_run_time = interval_end
+                if state:
+                    state.mark_next_run_time(next_run_time.isoformat())
+
+                # If running as a recovery job, exit when caught up
+                if self.explicit_start and next_run_time >= datetime.now(UTC) - timedelta(
+                    seconds=DATA_COMPLETENESS_DELAY_SEC
                 ):
-                    token = attach(baggage.set_baggage("workspace", str(payload.workspace)))
-                    try:
-                        self._runaction(action, Messager.CatalogueChanges(), Messager.Failures())
-                    finally:
-                        detach(token)
-
-            next_run_time = interval_end
-
-            # If running as a recovery job, exit when caught up
-            if self.explicit_start and next_run_time >= datetime.utcnow() - timedelta(
-                seconds=DATA_COMPLETENESS_DELAY_SEC
-            ):
-                break
+                    break
